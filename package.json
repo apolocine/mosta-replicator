@@ -1,0 +1,51 @@
+{
+  "name": "@mostajs/replicator",
+  "version": "0.1.0",
+  "description": "Replication manager for @mostajs — master/slave CQRS, cross-dialect CDC, read routing, failover",
+  "author": "Dr Hamid MADANI <drmdh@msn.com>",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "@mostajs/mproject": ">=1.0.7",
+    "@mostajs/orm": ">=1.8.0"
+  },
+  "devDependencies": {
+    "@mostajs/mproject": "^1.0.7",
+    "@mostajs/orm": "^1.8.0",
+    "@types/node": "^22.0.0",
+    "better-sqlite3": "^12.8.0",
+    "typescript": "^5.7.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/apolocine/mosta-replicator"
+  },
+  "keywords": [
+    "mostajs",
+    "replication",
+    "cqrs",
+    "master-slave",
+    "cdc",
+    "read-routing",
+    "failover",
+    "orm"
+  ]
+}
