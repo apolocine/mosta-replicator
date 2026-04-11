@@ -80,7 +80,7 @@ export interface ReplicationRule {
 }
 
 // ══════════════════════════════════════════════════════════
-// Sync stats
+// Sync stats & context
 // ══════════════════════════════════════════════════════════
 
 export interface SyncStats {
@@ -90,6 +90,33 @@ export interface SyncStats {
   errors: number
   /** Duration in ms */
   duration: number
+  /** Breakdown per collection */
+  details?: SyncCollectionStats[]
+}
+
+export interface SyncCollectionStats {
+  collection: string
+  created: number
+  updated: number
+  deleted: number
+  skipped: number
+  errors: number
+}
+
+/** Internal record for change tracking during sync */
+export interface ChangeRecord {
+  id: string
+  collection: string
+  op: 'create' | 'update' | 'delete' | 'skip'
+  data?: Record<string, unknown>
+  error?: string
+}
+
+/** Cursor for incremental CDC sync */
+export interface SyncCursor {
+  ruleName: string
+  /** Last sync timestamp per collection */
+  cursors: Record<string, Date>
 }
 
 // ══════════════════════════════════════════════════════════

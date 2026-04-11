@@ -2,7 +2,7 @@
 // Master/slave CQRS, cross-dialect CDC, read routing, failover
 // Author: Dr Hamid MADANI drmdh@msn.com
 
-import { createIsolatedDialect, EntityService, registerSchemas } from '@mostajs/orm'
+import { createIsolatedDialect, EntityService, registerSchemas, getAllSchemas } from '@mostajs/orm'
 import type { IDialect, EntitySchema, ConnectionConfig } from '@mostajs/orm'
 import type { ProjectManager } from '@mostajs/mproject'
 import type {
@@ -13,7 +13,9 @@ import type {
   SyncStats,
   ReadRoutingStrategy,
   ReplicatorTreeFile,
+  SyncCursor,
 } from './types.js'
+import { SyncEngine } from './sync-engine.js'
 import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
@@ -38,6 +40,8 @@ export class ReplicationManager {
   private routing = new Map<string, ReadRoutingStrategy>()
   private rules = new Map<string, ReplicationRule>()
   private syncStats = new Map<string, SyncStats>()
+  private syncCursors = new Map<string, SyncCursor>()
+  private syncEngine = new SyncEngine()
   private persistPath: string | null = null
   private pm: ProjectManager | null
 
@@ -51,8 +55,9 @@ export class ReplicationManager {
 
   /**
    * Add a replica (master or slave) to a project.
+   * @param schemas - optional schemas to init on the replica (falls back to ProjectManager or global registry)
    */
-  async addReplica(projectName: string, config: ReplicaConfig): Promise<void> {
+  async addReplica(projectName: string, config: ReplicaConfig, schemas?: EntitySchema[]): Promise<void> {
     // Validate project exists in ProjectManager if available
     if (this.pm && !this.pm.hasProject(projectName)) {
       throw new Error(`Projet "${projectName}" introuvable dans ProjectManager`)
@@ -78,12 +83,16 @@ export class ReplicationManager {
       }
     }
 
-    // Get schemas from project or empty
-    let schemas: EntitySchema[] = []
-    if (this.pm) {
-      const projectCtx = this.pm.getProject(projectName)
-      if (projectCtx) {
-        schemas = projectCtx.schemas
+    // Resolve schemas: explicit > ProjectManager > global registry
+    if (!schemas || schemas.length === 0) {
+      if (this.pm) {
+        const projectCtx = this.pm.getProject(projectName)
+        if (projectCtx) {
+          schemas = projectCtx.schemas
+        }
+      }
+      if (!schemas || schemas.length === 0) {
+        schemas = getAllSchemas()
       }
     }
 
@@ -329,7 +338,7 @@ export class ReplicationManager {
 
   /**
    * Manual sync trigger for a replication rule.
-   * Phase 4 implementation — placeholder for now.
+   * Resolves source/target EntityServices from replicas, then delegates to SyncEngine.
    */
   async sync(ruleName: string): Promise<SyncStats> {
     const rule = this.rules.get(ruleName)
@@ -341,23 +350,43 @@ export class ReplicationManager {
       throw new Error(`Regle "${ruleName}" est desactivee`)
     }
 
-    const start = Date.now()
+    const sourceEs = this.resolveMasterService(rule.source)
+    if (!sourceEs) {
+      throw new Error(`Pas de master connecte pour le projet source "${rule.source}"`)
+    }
 
-    // TODO Phase 4: implement actual CDC sync logic
-    // 1. Read source entities (rule.collections) from source project
-    // 2. Compare with target (by ID or timestamp)
-    // 3. Apply changes to target using conflict resolution strategy
-    // 4. Track stats
+    const targetEs = this.resolveMasterService(rule.target)
+    if (!targetEs) {
+      throw new Error(`Pas de master connecte pour le projet target "${rule.target}"`)
+    }
 
-    const stats: SyncStats = {
-      ruleName,
-      lastSync: new Date(),
-      recordsSynced: 0,
-      errors: 0,
-      duration: Date.now() - start,
+    let stats: SyncStats
+
+    switch (rule.mode) {
+      case 'snapshot': {
+        stats = await this.syncEngine.snapshot(sourceEs, targetEs, rule)
+        break
+      }
+      case 'cdc': {
+        const cursor = this.syncCursors.get(ruleName) ?? {
+          ruleName,
+          cursors: {},
+        }
+        const result = await this.syncEngine.incremental(sourceEs, targetEs, rule, cursor)
+        stats = result.stats
+        this.syncCursors.set(ruleName, result.newCursor)
+        break
+      }
+      case 'bidirectional': {
+        stats = await this.syncEngine.bidirectional(sourceEs, targetEs, rule)
+        break
+      }
+      default:
+        throw new Error(`Mode de replication inconnu: ${rule.mode}`)
     }
 
     this.syncStats.set(ruleName, stats)
+    await this.autoPersist()
     return stats
   }
 
@@ -438,6 +467,33 @@ export class ReplicationManager {
 
     // Note: replicas are NOT auto-reconnected from file
     // (URIs are masked for safety). Use addReplica() to reconnect.
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // Internal — resolve EntityService
+  // ══════════════════════════════════════════════════════════
+
+  /**
+   * Find the master replica's EntityService for a project.
+   */
+  private resolveMasterService(projectName: string): EntityService | null {
+    const projectReplicas = this.replicas.get(projectName)
+    const projectServices = this.entityServices.get(projectName)
+    if (!projectReplicas || !projectServices) return null
+
+    for (const [name, ctx] of projectReplicas) {
+      if (ctx.role === 'master' && ctx.status === 'connected') {
+        return projectServices.get(name) ?? null
+      }
+    }
+    return null
+  }
+
+  /**
+   * Get the sync cursor for a rule (for incremental CDC).
+   */
+  getSyncCursor(ruleName: string): SyncCursor | undefined {
+    return this.syncCursors.get(ruleName)
   }
 
   // ══════════════════════════════════════════════════════════
