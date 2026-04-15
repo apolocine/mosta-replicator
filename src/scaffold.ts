@@ -199,6 +199,34 @@ if (!existsSync(TREE)) {
 
 let running = true;
 
+// --- Resolve wildcard '*' in rule.collections by introspecting the master DB ---
+// This picks up tables added AFTER the rule was created. Runs on every tick
+// so new tables are replicated as soon as they appear in the master catalogue.
+async function resolveCollections(rule) {
+  if (!rule.collections || !rule.collections.includes('*')) return rule.collections;
+  const tree = JSON.parse(readFileSync(TREE, 'utf8'));
+  const reps = tree.replicas?.[rule.source] ?? {};
+  const entry = Object.entries(reps).find(([_, c]) => c.role === 'master');
+  if (!entry) throw new Error(\`no master replica for source project '\${rule.source}'\`);
+  const [, master] = entry;
+
+  const { getDialect } = await import(resolve('node_modules/@mostajs/orm/dist/index.js'));
+  const d = await getDialect({ dialect: master.dialect, uri: master.uri, schemaStrategy: 'none' });
+  try {
+    if (master.dialect === 'mongodb') {
+      const { default: mongoose } = await import('mongoose');
+      const names = (await mongoose.connection.db.listCollections().toArray()).map(c => c.name);
+      return names;
+    }
+    const sql = typeof d.getTableListQuery === 'function' ? d.getTableListQuery() : null;
+    if (!sql) throw new Error(\`dialect '\${master.dialect}' does not expose getTableListQuery\`);
+    const rows = await d.executeQuery(sql, []);
+    return rows.map(r => r.name ?? r.TABLE_NAME ?? r.table_name ?? Object.values(r)[0]).filter(Boolean);
+  } finally {
+    try { await d.disconnect(); } catch {}
+  }
+}
+
 async function tick() {
   let rules;
   try { rules = rm.listRules(); }
@@ -209,6 +237,16 @@ async function tick() {
 
   for (const r of enabled) {
     try {
+      // Wildcard resolution — swap the in-memory rule with the resolved list
+      // before calling sync. The tree on disk keeps '*' untouched so the
+      // next tick re-resolves (picks up new tables automatically).
+      if (r.collections?.includes('*')) {
+        const resolved = await resolveCollections(r);
+        if (!resolved.length) { warn(\`\${r.name} : wildcard resolved to 0 tables — skipping\`); continue; }
+        rm.removeReplicationRule(r.name);
+        rm.addReplicationRule({ ...r, collections: resolved });
+        log(\`\${r.name} : expanded '*' → \${resolved.length} table(s)\`);
+      }
       const stats = await rm.sync(r.name);
       log(\`sync \${r.name} — ins=\${stats.inserted ?? 0} upd=\${stats.updated ?? 0} del=\${stats.deleted ?? 0} fail=\${stats.failed ?? 0}\`);
     } catch (e) {

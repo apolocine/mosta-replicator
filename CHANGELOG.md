@@ -2,6 +2,36 @@
 
 All notable changes to `@mostajs/replicator` will be documented in this file.
 
+## [0.2.2] — 2026-04-15
+
+### Added — `'*'` wildcard resolved LIVE from master DB
+
+When `rule.collections` contains `'*'`, the emitted `services/replicator.mjs`
+now resolves the wildcard **at every tick** by introspecting the master
+replica's catalogue :
+
+- SQL dialects : `dialect.executeQuery(dialect.getTableListQuery())`
+- MongoDB      : `db.listCollections()`
+
+Then `rm.removeReplicationRule` + `rm.addReplicationRule` with the
+resolved list replaces the in-memory rule for the current tick. The tree
+on disk keeps `'*'` untouched — the next tick re-resolves, so **new
+tables added to the master after the rule was created are replicated
+automatically**.
+
+Log sample :
+
+```
+[replicator] 2026-04-15T… cdc-fitzone : expanded '*' → 40 table(s)
+[replicator] 2026-04-15T… sync cdc-fitzone — ins=0 upd=0 del=0 fail=0
+```
+
+Regenerate the service to pick this up :
+
+```bash
+npx mostajs-replicator-scaffold --force
+```
+
 ## [0.2.1] — 2026-04-15
 
 ### Fixed — emitted `services/replicator.mjs` now actually connects
