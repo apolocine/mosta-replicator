@@ -3,6 +3,8 @@
 // Author: Dr Hamid MADANI drmdh@msn.com
 
 export { ReplicationManager } from './replication-manager.js'
+export { scaffoldReplicatorService } from './scaffold.js'
+export type { ScaffoldOptions, ScaffoldResult } from './scaffold.js'
 export { SyncEngine } from './sync-engine.js'
 export { CDCListener } from './cdc-listener.js'
 export { SchemaMapper } from './schema-mapper.js'
