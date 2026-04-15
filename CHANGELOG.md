@@ -2,6 +2,30 @@
 
 All notable changes to `@mostajs/replicator` will be documented in this file.
 
+## [0.2.1] — 2026-04-15
+
+### Fixed — emitted `services/replicator.mjs` now actually connects
+
+The v0.2.0 template called `rm.loadFromFile(TREE)` which parsed the tree
+but did **not** open the DB connections — every `rm.sync(rule)` throws
+`Pas de master connecte pour le projet source "X"`. Users hit this
+immediately with `npm run replicator`.
+
+The template now parses the tree JSON directly and replays
+`pm.addProject` + `rm.addReplica` + `rm.addReplicationRule` +
+`rm.setReadRouting` — which does open the connections.
+
+Also : when a replica URI contains `:***@` (masked — typical of trees
+saved by pre-`orm-cli@0.5.6`), a warning is logged pointing to the
+rebuild path (`mostajs` menu r → 1 re-preserves the URI verbatim since
+orm-cli 0.5.6).
+
+Regenerate the service to pick the fix up :
+
+```bash
+npx mostajs-replicator-scaffold --force
+```
+
 ## [0.2.0] — 2026-04-15
 
 ### Added

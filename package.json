@@ -1,6 +1,6 @@
 {
   "name": "@mostajs/replicator",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Replication manager for @mostajs — master/slave CQRS, cross-dialect CDC, read routing, failover. Ships with a `scaffoldReplicatorService` emitter.",
   "bin": {
     "mostajs-replicator-scaffold": "dist/cli-scaffold.js"

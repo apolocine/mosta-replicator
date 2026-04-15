@@ -117,11 +117,84 @@ const { ProjectManager }     = await import(resolve('node_modules/@mostajs/mproj
 const pm = new ProjectManager();
 const rm = new ReplicationManager(pm);
 
-if (existsSync(TREE)) {
-  try { await rm.loadFromFile(TREE); log('loaded tree :', TREE); }
-  catch (e) { warn('tree load failed :', e.message); }
-} else {
+// --- Rebuild manager state from the tree JSON ---
+// We DO NOT call rm.loadFromFile() because that method was designed around
+// a masked-credentials tree (saveToFile(mask:true) is the default) and it
+// does not re-open the underlying DB connections — every subsequent sync()
+// throws "Pas de master connecte". Instead we parse the JSON and replay
+// addProject + addReplica + addReplicationRule using the URIs stored in
+// the tree (the orm-cli@0.5.6+ tree preserves them verbatim).
+
+if (!existsSync(TREE)) {
   warn(\`no tree at \${TREE} — configure replicas via 'mostajs' menu r first.\`);
+} else {
+  let tree;
+  try { tree = JSON.parse(readFileSync(TREE, 'utf8')); }
+  catch (e) { errf('tree parse failed :', e.message); process.exit(1); }
+
+  const replicas = tree.replicas ?? {};
+  const rules    = tree.rules    ?? {};
+  const routing  = tree.routing  ?? {};
+
+  for (const [project, reps] of Object.entries(replicas)) {
+    const repsEntries = Object.entries(reps);
+    if (repsEntries.length === 0) continue;
+
+    // Warn on masked URIs (can't reconnect without the real password).
+    for (const [name, cfg] of repsEntries) {
+      if (typeof cfg.uri === 'string' && cfg.uri.includes(':***@')) {
+        warn(\`replica \${project}/\${name} has a MASKED URI — sync will fail.\`);
+        warn(\`  rebuild the tree via 'mostajs' menu r → 1 (orm-cli 0.5.6+) or edit it manually.\`);
+      }
+    }
+
+    // addProject is a prerequisite for addReplica — use the first replica
+    // (usually the master) as the project baseline.
+    const first = repsEntries[0][1];
+    const method = ['addProject','createProject','registerProject'].find(m => typeof pm[m] === 'function');
+    if (method) {
+      try { await pm[method]({ name: project, dialect: first.dialect, uri: first.uri, schemas: [] }); }
+      catch (e) { warn(\`pm.\${method}(\${project}) threw : \${e.message}\`); }
+    }
+
+    // addReplica for each entry — this is what actually opens the connection.
+    for (const [name, cfg] of repsEntries) {
+      try {
+        await rm.addReplica(project, {
+          name,
+          role:           cfg.role,
+          dialect:        cfg.dialect,
+          uri:            cfg.uri,
+          pool:           cfg.pool,
+          lagTolerance:   cfg.lagTolerance,
+          schemaStrategy: cfg.schemaStrategy,
+        });
+        log(\`connected \${project}/\${name} [\${cfg.role}]\`);
+      } catch (e) {
+        errf(\`addReplica(\${project}/\${name}) threw : \${e.message}\`);
+      }
+    }
+  }
+
+  for (const [project, strategy] of Object.entries(routing)) {
+    try { rm.setReadRouting(project, strategy); } catch {}
+  }
+
+  for (const [name, r] of Object.entries(rules)) {
+    try {
+      rm.addReplicationRule({
+        name,
+        source:             r.source,
+        target:             r.target,
+        mode:               r.mode,
+        collections:        r.collections,
+        conflictResolution: r.conflictResolution,
+        enabled:            r.enabled ?? true,
+      });
+    } catch (e) { warn(\`addReplicationRule(\${name}) threw : \${e.message}\`); }
+  }
+
+  log(\`tree loaded : \${Object.keys(replicas).length} project(s), \${Object.keys(rules).length} rule(s)\`);
 }
 
 let running = true;
